@@ -1,11 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Fri Sep  7 11:03:55 2018
+Created on 2024, 18 11 and based on the one  described in
+Zhang, Z., Zhao, Y., Liu, J. et al. A general deep learning
+framework for network reconstruction and dynamics learning.
+Appl Netw Sci 4, 110 (2019) doi:10.1007/s41109-019-0194-4
 
-@author: xinruyue
+Trying to reproduce the results in
+
+Chen, Mengyuan, et al.
+«Inferring Network Structure with Unobservable Nodes from Time Series Data».
+Chaos: An Interdisciplinary Journal of Nonlinear Science, vol. 32, fasc.1,
+ January 2022, p. 013126. DOI.org (Crossref), https://doi.org/10.1063/5.0076521.
+
+
+@author: ludruggiero
 """
+
 import sys
+
 sys.path.append('..')
 
 import torch
@@ -21,6 +34,7 @@ np.random.seed(2050)
 torch.manual_seed(2050)
 if use_cuda:
     torch.cuda.manual_seed(2050)
+
 
 # Network Generator
 # This class is used to generate discrete networks using Gumbel softmax
@@ -51,37 +65,41 @@ class Gumbel_Generator(nn.Module):
             out = hh
         if use_cuda:
             out = out.cuda()
-        out_matrix = out[:,0].view(self.gen_matrix.size()[0], self.gen_matrix.size()[0])
+        out_matrix = out[:, 0].view(self.gen_matrix.size()[0], self.gen_matrix.size()[0])
         return out_matrix
+
     def get_temperature(self):
         return self.temperature
+
     def get_cross_entropy(self, obj_matrix):
-        # 计算与目标矩阵的距离
+        # Calculate the distance from the target matrix
         logps = F.softmax(self.gen_matrix, 2)
-        logps = torch.log(logps[:,:,0] + 1e-10) * obj_matrix + torch.log(logps[:,:,1] + 1e-10) * (1 - obj_matrix)
+        logps = torch.log(logps[:, :, 0] + 1e-10) * obj_matrix + torch.log(logps[:, :, 1] + 1e-10) * (1 - obj_matrix)
         result = - torch.sum(logps)
         result = result.cpu() if use_cuda else result
         return result.data.numpy()
+
     def get_entropy(self):
         logps = F.softmax(self.gen_matrix, 2)
         result = torch.mean(torch.sum(logps * torch.log(logps + 1e-10), 1))
         result = result.cpu() if use_cuda else result
-        return(- result.data.numpy())
+        return (- result.data.numpy())
+
     def randomization(self, fraction):
-        # 将gen_matrix重新随机初始化，fraction为重置比特的比例
+        # Re-randomize gen_matrix, fraction is the proportion of bits to reset
         sz = self.gen_matrix.size()[0]
         numbers = int(fraction * sz * sz)
         original = self.gen_matrix.cpu().data.numpy()
-        
+
         for i in range(numbers):
             ii = np.random.choice(range(sz), (2, 1))
             z = torch.rand(2).cuda() if use_cuda else torch.rand(2)
             self.gen_matrix.data[ii[0], ii[1], :] = z
 
 
-#Graph Network （Dynamics Learning）
+# Graph Network (Dynamics Learning)
 class GumbelGraphNetwork(nn.Module):
-    def __init__(self, input_size, hidden_size = 128):
+    def __init__(self, input_size, hidden_size=128):
         super(GumbelGraphNetwork, self).__init__()
         # Applies an affine linear transformation to the incoming data
         self.edge1 = torch.nn.Linear(2 * input_size, hidden_size)
@@ -89,20 +107,20 @@ class GumbelGraphNetwork(nn.Module):
         self.node2node = torch.nn.Linear(hidden_size, hidden_size)
         self.node2node2 = torch.nn.Linear(hidden_size, hidden_size)
         self.output = torch.nn.Linear(input_size + hidden_size, input_size)
-        
-    def forward(self, x, adj,skip_conn=0):
+
+    def forward(self, x, adj, skip_conn=0):
         # adj[batch,node,node]
         # x[batch,node,dim]
         out = x
-        
+
         # innode [batch,node,node,dim]
         # repeat repeats the tensor along the second axis (nodes), so the resulting shape becomes [batch, node, node, dim].
         innode = out.unsqueeze(1).repeat(1, adj.size()[1], 1, 1)
         # outnode [batch,node,node,dim]
-        outnode = innode.transpose(1, 2) # transposes the second and third dimensions
+        outnode = innode.transpose(1, 2)  # transposes the second and third dimensions
         # node2edge:[batch,node,node,2*dim->hidden]
         # Learnable layer (likely a linear transformation) applied to the concatenated tensor, followed by a ReLU activation.
-        node2edge = F.relu(self.edge1(torch.cat((innode,outnode), 3)))
+        node2edge = F.relu(self.edge1(torch.cat((innode, outnode), 3)))
         # edge2edge:[batch,node,node,hidden]
         edge2edge = F.relu(self.edge2edge(node2edge))
         # adjs:[batch,node,node,1]
@@ -110,39 +128,41 @@ class GumbelGraphNetwork(nn.Module):
         # adjs:[batch,node,node,hidden]
         adjs = adjs.repeat(1, 1, 1, edge2edge.size()[3])
         # edges:[batch,node,node,hidden]
-        edges = adjs * edge2edge # weighted edges based on adjacency.
+        edges = adjs * edge2edge  # weighted edges based on adjacency.
         # out:[batch,node,hid]
-        out = torch.sum(edges, 2) #  summed along the node dimension
+        out = torch.sum(edges, 2)  # summed along the node dimension
         # out:[batch,node,hid]
         out = F.relu(self.node2node(out))
-        out = F.relu(self.node2node2(out)) # Refine the node features.
+        out = F.relu(self.node2node2(out))  # Refine the node features.
         # out:[batch,node,dim+hid]
         # original node features are concatenated with the transformed ones along the last dimension
-        out = torch.cat((x, out), dim = -1)
+        out = torch.cat((x, out), dim=-1)
         # out:[batch,node,dim]
         out = self.output(out)
         if skip_conn == 1:
             out = out + x
         return out
 
+
 # nn
 class GumbelGraphNetworkClf(nn.Module):
-    def __init__(self, input_size, hidden_size = 256):
+    def __init__(self, input_size, hidden_size=256):
         super(GumbelGraphNetworkClf, self).__init__()
         self.edge1 = torch.nn.Linear(2 * input_size, hidden_size)
         self.edge2edge = torch.nn.Linear(hidden_size, hidden_size)
         self.node2node = torch.nn.Linear(hidden_size, hidden_size)
         self.node2node2 = torch.nn.Linear(hidden_size, hidden_size)
-        self.output = torch.nn.Linear(input_size+hidden_size, input_size)
-        self.logsoftmax = nn.LogSoftmax(dim=2)
+        self.output = torch.nn.Linear(input_size + hidden_size, input_size)
+        self.logsoftmax = nn.LogSoftmax(dim=2)  # check
         self.test1 = torch.nn.Linear(hidden_size, hidden_size)
         self.test2 = torch.nn.Linear(hidden_size, hidden_size)
         self.test3 = torch.nn.Linear(hidden_size, hidden_size)
+
     def forward(self, x, adj):
         out = x
         innode = out.unsqueeze(1).repeat(1, adj.size()[1], 1, 1)
         outnode = innode.transpose(1, 2)
-        node2edge = F.relu(self.edge1(torch.cat((innode,outnode), 3)))
+        node2edge = F.relu(self.edge1(torch.cat((innode, outnode), 3)))
         edge2edge = F.relu(self.edge2edge(node2edge))
         adjs = adj.view(adj.size()[0], adj.size()[1], adj.size()[2], 1)
         adjs = adjs.repeat(1, 1, 1, edge2edge.size()[3])
@@ -152,7 +172,7 @@ class GumbelGraphNetworkClf(nn.Module):
         out = torch.sum(edges, 1)
         out = F.relu(self.node2node(out))
         out = F.relu(self.node2node2(out))
-        out = torch.cat((x, out), dim = -1)
+        out = torch.cat((x, out), dim=-1)
         out = self.output(out)
         out = self.logsoftmax(out)
         return out
