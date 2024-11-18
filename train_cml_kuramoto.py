@@ -176,6 +176,7 @@ def main():
             print('\n---------- Experiment %d  Epoch %d ----------' % (experiment, epoch))
             train_dynamics(args, dynamics_learner, gumbel_generator, optimizer,
                            device, train_loader, epoch, experiment,args.skip)
+            # Validate the dynamics learner
             val_loss = val_dynamics(args, dynamics_learner, gumbel_generator,
                                     device, val_loader, epoch, experiment, best_val_loss,args.skip)
             train_gumbel(args, dynamics_learner, gumbel_generator, optimizer_network,
@@ -187,6 +188,8 @@ def main():
             print('\nCurrent best epoch: %d, best val loss: %f' % (best_epoch, best_val_loss))
 
         print('\nBest epoch: %d' % best_epoch)
+
+        # Testing
         test(args, dynamics_learner, gumbel_generator, device, test_loader, object_matrix, experiment,args.skip)
 
 

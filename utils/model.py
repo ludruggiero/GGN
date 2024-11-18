@@ -23,19 +23,25 @@ if use_cuda:
     torch.cuda.manual_seed(2050)
 
 # Network Generator
-# 此类为一个利用Gumbel softmax生成离散网络的类
+# This class is used to generate discrete networks using Gumbel softmax
+# The structure isn't explicitly implemented in the code, since it is implicitly implemented
+# by the function Softmax, which handles the computation of exponentials and normalization.
+
 class Gumbel_Generator(nn.Module):
-    def __init__(self, sz = 10, temp = 10, temp_drop_frac = 0.9999):
+    def __init__(self, sz=10, temp=10, temp_drop_frac=0.9999):
         super(Gumbel_Generator, self).__init__()
         self.gen_matrix = Parameter(torch.rand(sz, sz, 2))
-        #gen_matrix 为邻接矩阵的概率
+        # gen_matrix is the probability of the adjacency matrix
         self.temperature = temp
         self.temp_drop_frac = temp_drop_frac
+
     def drop_temperature(self):
-        # 降温过程
+        # Cooling process (reducing the temperature)
         self.temperature = self.temperature * self.temp_drop_frac
+
     def sample(self, hard=False):
-        # 采样——得到一个临近矩阵
+        # Sampling — obtain an adjacency matrix
+        # The -1 lets PyTorch infer the required number of rows based on the total number of elements.
         self.logp = self.gen_matrix.view(-1, 2)
         out = gumbel_softmax(self.logp, self.temperature, hard)
         if hard:
@@ -77,6 +83,7 @@ class Gumbel_Generator(nn.Module):
 class GumbelGraphNetwork(nn.Module):
     def __init__(self, input_size, hidden_size = 128):
         super(GumbelGraphNetwork, self).__init__()
+        # Applies an affine linear transformation to the incoming data
         self.edge1 = torch.nn.Linear(2 * input_size, hidden_size)
         self.edge2edge = torch.nn.Linear(hidden_size, hidden_size)
         self.node2node = torch.nn.Linear(hidden_size, hidden_size)
@@ -89,10 +96,12 @@ class GumbelGraphNetwork(nn.Module):
         out = x
         
         # innode [batch,node,node,dim]
+        # repeat repeats the tensor along the second axis (nodes), so the resulting shape becomes [batch, node, node, dim].
         innode = out.unsqueeze(1).repeat(1, adj.size()[1], 1, 1)
         # outnode [batch,node,node,dim]
-        outnode = innode.transpose(1, 2)
+        outnode = innode.transpose(1, 2) # transposes the second and third dimensions
         # node2edge:[batch,node,node,2*dim->hidden]
+        # Learnable layer (likely a linear transformation) applied to the concatenated tensor, followed by a ReLU activation.
         node2edge = F.relu(self.edge1(torch.cat((innode,outnode), 3)))
         # edge2edge:[batch,node,node,hidden]
         edge2edge = F.relu(self.edge2edge(node2edge))
@@ -101,13 +110,14 @@ class GumbelGraphNetwork(nn.Module):
         # adjs:[batch,node,node,hidden]
         adjs = adjs.repeat(1, 1, 1, edge2edge.size()[3])
         # edges:[batch,node,node,hidden]
-        edges = adjs * edge2edge
+        edges = adjs * edge2edge # weighted edges based on adjacency.
         # out:[batch,node,hid]
-        out = torch.sum(edges, 2)
+        out = torch.sum(edges, 2) #  summed along the node dimension
         # out:[batch,node,hid]
         out = F.relu(self.node2node(out))
-        out = F.relu(self.node2node2(out))
+        out = F.relu(self.node2node2(out)) # Refine the node features.
         # out:[batch,node,dim+hid]
+        # original node features are concatenated with the transformed ones along the last dimension
         out = torch.cat((x, out), dim = -1)
         # out:[batch,node,dim]
         out = self.output(out)

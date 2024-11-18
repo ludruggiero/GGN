@@ -70,27 +70,27 @@ def train_batch_dyn(optimizer,dyn_learner,adj,data_train,data_target,loss_fn):
     loss = 0
     #optimizer
     optimizer.zero_grad()
-    
+
     num_nodes = adj.size(0)
     #adj mat
     adj = adj.unsqueeze(0)
     adj = adj.repeat(data_train.size()[0],1,1)
     adj = adj.cuda() if use_cuda else adj
-    
+
 
     # get result caculated by neural network
     output = dyn_learner(data_train,adj)
     output = output.permute(0,2,1)
-    
+
     # caculate the difference
     data_target = data_target.long()
     accus = cacu_accu(output,data_target)
     loss = loss_fn(output,data_target)
-    loss.backward()
-    
-    # optimizer for dyn learner 
-    optimizer.step()
-    
+    loss.backward() # computes the gradient
+
+    # optimizer for dyn learner
+    optimizer.step() # updates the parameters (here passed as input to the function (?) )
+
     return loss,accus
 
 
@@ -112,8 +112,8 @@ def train_batch_generator(optimizer_network,gumbel_generator,dyn_learner,data_tr
     # caculate the difference
     data_target = data_target.long()
     loss = loss_fn(output,data_target)
-    loss.backward()
-    optimizer_network.step()
+    loss.backward()         # Computes the gradient of current tensor wrt graph leaves
+    optimizer_network.step() # Perform a single optimization step to update parameter.
     return loss,out_matrix
 
 
